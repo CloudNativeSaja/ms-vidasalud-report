@@ -1,12 +1,15 @@
 package cl.duoc.vidasalud.report.listener;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.listener.AbstractConsumerSeekAware;
 import org.springframework.stereotype.Component;
 
 import cl.duoc.vidasalud.report.event.AppointmentEvent;
@@ -27,7 +30,7 @@ import jakarta.validation.Validator;
  * las particiones entre ambas (balanceo de carga).
  */
 @Component
-public class AppointmentEventListener {
+public class AppointmentEventListener extends AbstractConsumerSeekAware {
 
     private static final Logger log = LoggerFactory.getLogger(AppointmentEventListener.class);
 
@@ -56,6 +59,20 @@ public class AppointmentEventListener {
             log.info("Evento duplicado descartado: {} (particion={}, offset={})",
                     event.eventId(), record.partition(), record.offset());
         }
+    }
+
+    /**
+     * Este servicio guarda su estado solo en memoria. Un grupo que ya confirmo
+     * offsets seguiria desde ahi tras un reinicio y el estado quedaria vacio;
+     * por eso, al asignarse cada particion se relee desde el inicio. Es seguro
+     * repetir eventos: el servicio descarta los duplicados por eventId.
+     */
+    @Override
+    public void onPartitionsAssigned(Map<TopicPartition, Long> assignments, ConsumerSeekCallback callback) {
+        super.onPartitionsAssigned(assignments, callback);
+        assignments.keySet().forEach(tp -> callback.seekToBeginning(tp.topic(), tp.partition()));
+        log.info("Reconstruyendo estado: releyendo los eventos de citas desde el inicio ({} particion(es) asignada(s))",
+                assignments.size());
     }
 
     private void validate(AppointmentEvent event, ConsumerRecord<String, AppointmentEvent> record) {
